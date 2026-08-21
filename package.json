@@ -1,0 +1,13 @@
+{
+  "name": "codex-web-panel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mobile web panel for controlling Codex CLI on the local machine",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

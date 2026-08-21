@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1216">
+  <title>Codex 远程</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <div id="scrim" hidden></div>
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">Codex 远程</span>
+        <button id="closeSidebar" class="icon-btn" title="关闭">×</button>
+      </div>
+      <button id="newSessionBtn" class="new-btn">+ 新会话</button>
+      <ul id="sessionList"></ul>
+    </aside>
+
+    <main>
+      <header>
+        <button id="menuBtn" class="icon-btn" title="会话列表">☰</button>
+        <div class="title-wrap">
+          <div id="chatTitle">选择或新建一个会话</div>
+          <div id="chatSub"></div>
+        </div>
+        <div id="statusPill" class="pill idle">空闲</div>
+        <button id="stopBtn" class="danger-btn" hidden>停止</button>
+      </header>
+
+      <section id="chatScroll">
+        <div id="chat"></div>
+      </section>
+
+      <section id="newPanel" hidden>
+        <div class="panel-inner">
+          <h2>新建会话</h2>
+          <label>项目目录</label>
+          <select id="projectSelect"></select>
+          <label>初始指令</label>
+          <textarea id="newPrompt" rows="4" placeholder="告诉 Codex 要做什么…"></textarea>
+          <div class="panel-actions">
+            <button id="cancelNew" class="ghost-btn">取消</button>
+            <button id="createSession" class="primary-btn">开始</button>
+          </div>
+        </div>
+      </section>
+
+      <footer id="composer">
+        <textarea id="promptInput" rows="1" placeholder="输入消息,Enter 发送" disabled></textarea>
+        <button id="sendBtn" class="primary-btn" disabled>发送</button>
+      </footer>
+    </main>
+  </div>
+
+  <div id="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>
