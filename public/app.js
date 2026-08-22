@@ -11,6 +11,12 @@
     running: false,
     runningSince: null,
     projects: [],
+    sessionFilter: '',
+    followLatest: true,
+    restoredSession: false,
+    connection: 'connecting',
+    eventKeys: new Set(),
+    renderContext: null,
   };
 
   const el = {
@@ -20,13 +26,18 @@
     closeSidebar: $('closeSidebar'),
     menuBtn: $('menuBtn'),
     newSessionBtn: $('newSessionBtn'),
+    emptyNewBtn: null,
+    sessionSearch: $('sessionSearch'),
+    sessionCount: $('sessionCount'),
     sessionList: $('sessionList'),
     chatTitle: $('chatTitle'),
     chatSub: $('chatSub'),
+    connectionPill: $('connectionPill'),
     statusPill: $('statusPill'),
     stopBtn: $('stopBtn'),
     chatScroll: $('chatScroll'),
     chat: $('chat'),
+    jumpLatest: $('jumpLatest'),
     newPanel: $('newPanel'),
     projectSelect: $('projectSelect'),
     newPrompt: $('newPrompt'),
@@ -39,6 +50,17 @@
 
   // ---------- helpers ----------
 
+  let webToken = '';
+  try {
+    const queryToken = new URLSearchParams(window.location.search).get('token');
+    webToken = queryToken || sessionStorage.getItem('codex-web-token') || '';
+    if (queryToken) {
+      sessionStorage.setItem('codex-web-token', queryToken);
+      const cleanUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  } catch {}
+
   function toast(msg, isError) {
     el.toast.textContent = msg;
     el.toast.classList.toggle('error', !!isError);
@@ -49,10 +71,44 @@
     }, 3500);
   }
 
+  function setConnection(status) {
+    state.connection = status;
+    el.app.classList.remove('connecting', 'offline', 'online');
+    el.app.classList.add(status === 'online' ? 'online' : status === 'offline' ? 'offline' : 'connecting');
+    el.connectionPill.className = 'connection-pill ' + status;
+    el.connectionPill.textContent = status === 'online' ? '已连接' : status === 'offline' ? '已断开' : '重连中';
+  }
+
+  function isNearLatest() {
+    const node = el.chatScroll;
+    return node.scrollHeight - node.scrollTop - node.clientHeight < 72;
+  }
+
+  function updateLatestButton() {
+    state.followLatest = isNearLatest();
+    el.jumpLatest.hidden = state.followLatest;
+  }
+
+  function scrollLatest(force) {
+    if (force || state.followLatest) {
+      el.chatScroll.scrollTop = el.chatScroll.scrollHeight;
+    }
+    updateLatestButton();
+  }
+
+  function eventKey(ev) {
+    if (!ev) return '';
+    if (ev.seq != null) return 'seq:' + ev.seq;
+    const p = ev.payload || {};
+    const id = p.callId || p.turnId || p.message || p.state || '';
+    return [ev.kind, ev.ts || '', id].join(':');
+  }
+
   async function api(pathname, options) {
     const opts = options || {};
     const headers = Object.assign({}, opts.headers || {});
     if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (webToken) headers['X-Codex-Token'] = webToken;
     const res = await fetch(pathname, {
       method: opts.method || 'GET',
       headers,
@@ -82,8 +138,103 @@
       .replace(/"/g, '&quot;');
   }
 
+  function shellInline(text) {
+    let out = esc(text);
+    out = out.replace(/(^|\s)(--?[\w][\w-]*)/g, '$1<span class="flag">$2</span>');
+    out = out.replace(/(&quot;[^&\n]*?&quot;|'[^'\n]*')/g, '<span class="string">$1</span>');
+    return out;
+  }
+
   function truncate(s, n) {
     return s.length > n ? s.slice(0, n) + '\n… (已截断)' : s;
+  }
+
+  function inlineMarkdown(text) {
+    let out = esc(text);
+    out = out.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
+    out = out.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    out = out.replace(/_([^_\n]+)_/g, '<em>$1</em>');
+    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    return out;
+  }
+
+  function markdown(text) {
+    const lines = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
+    const out = [];
+    let paragraph = [];
+    let list = null;
+    let code = null;
+    const flushParagraph = () => {
+      if (paragraph.length) {
+        out.push('<p>' + paragraph.map(inlineMarkdown).join('<br>') + '</p>');
+        paragraph = [];
+      }
+    };
+    const closeList = () => {
+      if (list) {
+        out.push('</' + list + '>');
+        list = null;
+      }
+    };
+    for (const line of lines) {
+      const fence = line.match(/^\s*```\s*([\w+-]*)\s*$/);
+      if (fence) {
+        flushParagraph();
+        closeList();
+        if (code) {
+          out.push('</code></pre>');
+          code = null;
+        } else {
+          code = fence[1] || '';
+          out.push('<pre><code' + (code ? ' class="language-' + esc(code) + '"' : '') + '>');
+        }
+        continue;
+      }
+      if (code) {
+        out.push(esc(line) + '\n');
+        continue;
+      }
+      if (!line.trim()) {
+        flushParagraph();
+        closeList();
+        continue;
+      }
+      const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+      if (heading) {
+        flushParagraph();
+        closeList();
+        const level = heading[1].length;
+        out.push('<h' + level + '>' + inlineMarkdown(heading[2]) + '</h' + level + '>');
+        continue;
+      }
+      const item = line.match(/^\s*([-*+] |\d+[.] )(.+)$/);
+      if (item) {
+        flushParagraph();
+        const ordered = /^\d/.test(item[1]);
+        const nextList = ordered ? 'ol' : 'ul';
+        if (list !== nextList) {
+          closeList();
+          list = nextList;
+          out.push('<' + list + '>');
+        }
+        out.push('<li>' + inlineMarkdown(item[2]) + '</li>');
+        continue;
+      }
+      if (/^\s*>/.test(line)) {
+        flushParagraph();
+        closeList();
+        out.push('<blockquote>' + inlineMarkdown(line.replace(/^\s*>\s?/, '')) + '</blockquote>');
+        continue;
+      }
+      closeList();
+      paragraph.push(line);
+    }
+    if (code) out.push('</code></pre>');
+    flushParagraph();
+    closeList();
+    return out.join('');
   }
 
   // ---------- SSE ----------
@@ -93,8 +244,11 @@
 
   function openEventStream() {
     if (sse) sse.close();
-    sse = new EventSource('/api/events');
+    setConnection('connecting');
+    const streamUrl = webToken ? '/api/events?token=' + encodeURIComponent(webToken) : '/api/events';
+    sse = new EventSource(streamUrl);
     sse.onopen = () => {
+      setConnection('online');
       // Fires on initial connect and on every automatic reconnect.
       // Sync state so a page restored from background never shows stale data.
       refreshNow();
@@ -106,6 +260,7 @@
       } catch {}
     };
     sse.onerror = () => {
+      setConnection('offline');
       scheduleSessionRefresh();
     };
   }
@@ -147,7 +302,18 @@
       const data = await api('/api/sessions');
       state.sessions = data.sessions || [];
       renderSessionList();
-    } catch {}
+      if (!state.currentId && !state.restoredSession) {
+        state.restoredSession = true;
+        let saved = '';
+        try { saved = localStorage.getItem('codex-current-session') || ''; } catch {}
+        if (saved && state.sessions.some((s) => s.id === saved)) openSession(saved);
+      }
+    } catch (e) {
+      if (!state.sessions.length) {
+        el.sessionList.innerHTML = '<li class="session-empty">无法加载会话列表</li>';
+      }
+      if (state.connection === 'online') setConnection('offline');
+    }
   }
 
   let refreshLock = false;
@@ -157,6 +323,8 @@
     try {
       await loadSessions();
       if (state.currentId && state.detail) {
+        const keepPosition = el.chatScroll.scrollTop;
+        const shouldFollow = isNearLatest();
         try {
           const detail = await api('/api/sessions/' + state.currentId);
           state.detail = detail;
@@ -168,8 +336,7 @@
           setRunning(detail.status === 'running');
           el.chatTitle.textContent = titleFromDetail(detail);
           el.chatSub.textContent = [detail.cwd, detail.model].filter(Boolean).join(' · ');
-          renderChat();
-          el.chatScroll.scrollTop = el.chatScroll.scrollHeight;
+          renderChat({ preservePosition: true, keepPosition, shouldFollow });
         } catch {}
       }
     } finally {
@@ -179,9 +346,32 @@
 
   function renderSessionList() {
     el.sessionList.innerHTML = '';
-    for (const s of state.sessions) {
+    const query = state.sessionFilter.trim().toLowerCase();
+    const sessions = query
+      ? state.sessions.filter((s) => [s.title, s.cwd, s.model].filter(Boolean).join(' ').toLowerCase().includes(query))
+      : state.sessions;
+    el.sessionCount.textContent = query ? `${sessions.length}/${state.sessions.length}` : String(state.sessions.length);
+    if (!sessions.length) {
+      const empty = document.createElement('li');
+      empty.className = 'session-empty';
+      empty.textContent = query ? '没有匹配的会话' : '还没有会话';
+      el.sessionList.appendChild(empty);
+      return;
+    }
+    let lastBucket = '';
+    for (const s of sessions) {
+      const bucket = sessionBucket(s.updatedAt);
+      if (bucket !== lastBucket) {
+        const heading = document.createElement('li');
+        heading.className = 'session-group-label';
+        heading.textContent = bucket;
+        el.sessionList.appendChild(heading);
+        lastBucket = bucket;
+      }
       const li = document.createElement('li');
       li.className = 'session-item' + (s.id === state.currentId ? ' active' : '');
+      li.tabIndex = 0;
+      li.setAttribute('role', 'button');
       li.innerHTML =
         '<div class="session-title">' + esc(s.title) + '</div>' +
         '<div class="session-meta">' +
@@ -190,8 +380,24 @@
         '<span>' + relTime(s.updatedAt) + '</span>' +
         '</div>';
       li.addEventListener('click', () => openSession(s.id));
+      li.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openSession(s.id);
+        }
+      });
       el.sessionList.appendChild(li);
     }
+  }
+
+  function sessionBucket(iso) {
+    const date = iso ? new Date(iso) : new Date(0);
+    const now = new Date();
+    const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const time = date.getTime();
+    if (time >= startToday) return '今天';
+    if (time >= startToday - 24 * 60 * 60 * 1000) return '昨天';
+    return '更早';
   }
 
   function openSidebar(open) {
@@ -205,8 +411,11 @@
 
   async function openSession(id) {
     state.currentId = id;
+    try { localStorage.setItem('codex-current-session', id); } catch {}
     state.detail = null;
     state.lastSeq = -1;
+    state.eventKeys = new Set();
+    state.renderContext = null;
     el.promptInput.disabled = true;
     el.sendBtn.disabled = true;
     openSidebar(false);
@@ -223,12 +432,13 @@
       setRunning(detail.status === 'running');
       el.chatTitle.textContent = titleFromDetail(detail);
       el.chatSub.textContent = [detail.cwd, detail.model].filter(Boolean).join(' · ');
-      renderChat();
-      el.chatScroll.scrollTop = el.chatScroll.scrollHeight;
+      renderChat({ forceBottom: true });
       scheduleSessionRefresh();
     } catch (e) {
       toast('加载会话失败:' + e.message, true);
       state.currentId = null;
+      try { localStorage.removeItem('codex-current-session'); } catch {}
+      renderChat();
     }
   }
 
@@ -250,15 +460,13 @@
     el.stopBtn.hidden = !running;
     el.promptInput.disabled = running || !state.currentId;
     el.sendBtn.disabled = running || !state.currentId || !el.promptInput.value.trim();
-    if (running && state.detail) {
-      el.chatScroll.scrollTop = el.chatScroll.scrollHeight;
-    }
+    if (running && state.detail && isNearLatest()) scrollLatest(true);
   }
 
   let pillTimer = null;
   function updateStatusPill() {
     const pill = el.statusPill;
-    pill.classList.remove('running', 'stopped');
+    pill.classList.remove('running', 'stopped', 'idle');
     if (state.running) {
       pill.classList.add('running');
       const update = () => {
@@ -270,60 +478,163 @@
       pillTimer = setInterval(update, 1000);
     } else {
       clearInterval(pillTimer);
+      pill.classList.add('idle');
       pill.textContent = '空闲';
     }
   }
 
-  function renderChat() {
-    const events = state.detail ? state.detail.events : [];
-    el.chat.innerHTML = '';
-    if (!events.length) {
-      el.chat.innerHTML = '<div class="empty-state"><h2>这个会话还没有消息</h2></div>';
-      return;
+  function emptyState() {
+    const div = document.createElement('div');
+    div.className = 'empty-state';
+    const heading = document.createElement('h2');
+    heading.textContent = state.currentId ? '这个会话还没有消息' : '还没有打开会话';
+    div.appendChild(heading);
+    const detail = document.createElement('p');
+    detail.textContent = state.currentId ? '发送一条消息开始工作' : '从左侧选择一个会话，或新建一个任务';
+    div.appendChild(detail);
+    if (!state.currentId) {
+      const button = document.createElement('button');
+      button.className = 'primary-btn empty-action';
+      button.type = 'button';
+      button.textContent = '+ 新建会话';
+      button.addEventListener('click', () => openNewPanel());
+      el.emptyNewBtn = button;
+      div.appendChild(button);
     }
-    const toolMap = new Map();
-    const frag = document.createDocumentFragment();
-    let pendingToken = null;
-    let lastUser = null;
-    let lastAgent = null;
-    for (const ev of events) {
-      if (ev.kind === 'user_message') {
-        if (lastUser === ev.payload.message) continue;
-        lastUser = ev.payload.message;
-        frag.appendChild(bubble('user', ev.payload.message));
-      } else if (ev.kind === 'agent_message') {
-        if (lastAgent === ev.payload.message) continue;
-        lastAgent = ev.payload.message;
-        frag.appendChild(bubble('assistant', ev.payload.message));
-      } else if (ev.kind === 'tool_call') {
-        const card = toolCard(ev.payload);
-        toolMap.set(ev.payload.callId, card);
-        frag.appendChild(card.el);
-      } else if (ev.kind === 'tool_output') {
-        const card = toolMap.get(ev.payload.callId);
-        if (card) card.finish(ev.payload);
-      } else if (ev.kind === 'token_usage') {
-        pendingToken = ev.payload.info;
-      } else if (ev.kind === 'task_started') {
-        frag.appendChild(chip('开始处理', 'running'));
-      } else if (ev.kind === 'task_complete') {
-        const parts = ['完成'];
-        if (ev.payload.durationMs != null) parts.push('用时 ' + Math.round(ev.payload.durationMs / 1000) + 's');
-        if (pendingToken && pendingToken.total_token_usage) {
-          const u = pendingToken.total_token_usage;
-          parts.push('输入 ' + u.input_tokens + ' · 输出 ' + u.output_tokens);
-        }
-        frag.appendChild(chip(parts.join(' · '), ''));
-        pendingToken = null;
+    return div;
+  }
+
+  function closeToolGroup(context) {
+    if (context) context.toolGroup = null;
+  }
+
+  function createToolGroup(target, context) {
+    const root = document.createElement('section');
+    root.className = 'tool-group';
+    root.dataset.groupKey = 'group-' + (context.groupIndex++);
+
+    const summary = document.createElement('button');
+    summary.className = 'tool-group-summary';
+    summary.type = 'button';
+    summary.setAttribute('aria-expanded', 'false');
+    summary.innerHTML = '<span class="tool-group-dot">●</span><span class="tool-group-label">Ran</span><span class="tool-group-count">0 commands</span><span class="tool-group-hint">展开执行记录</span>';
+    const body = document.createElement('div');
+    body.className = 'tool-group-body';
+    body.hidden = true;
+    summary.addEventListener('click', () => {
+      const open = !root.classList.contains('open');
+      root.classList.toggle('open', open);
+      body.hidden = !open;
+      summary.setAttribute('aria-expanded', String(open));
+      const hint = summary.querySelector('.tool-group-hint');
+      if (hint) hint.textContent = open ? '收起执行记录' : '展开执行记录';
+    });
+    root.appendChild(summary);
+    root.appendChild(body);
+    target.appendChild(root);
+
+    const group = {
+      root,
+      body,
+      summary,
+      cards: [],
+      add(card) {
+        this.cards.push(card);
+        card.group = this;
+        this.body.appendChild(card.el);
+        context.toolMap.set(card.callId, card);
+        this.update();
+      },
+      update() {
+        const failed = this.cards.some((card) => card.el.classList.contains('fail'));
+        const running = this.cards.some((card) => card.el.classList.contains('run'));
+        root.classList.toggle('failed', failed);
+        root.classList.toggle('running', !failed && running);
+        const label = this.summary.querySelector('.tool-group-label');
+        const count = this.summary.querySelector('.tool-group-count');
+        if (label) label.textContent = running && !failed ? 'Run' : 'Ran';
+        if (count) count.textContent = this.cards.length + (this.cards.length === 1 ? ' command' : ' commands');
+      },
+    };
+    context.toolGroup = group;
+    return group;
+  }
+
+  function appendTranscriptEvent(ev, target, context) {
+    if (!ev || !context) return;
+    if (ev.kind === 'user_message') {
+      closeToolGroup(context);
+      target.appendChild(bubble('user', ev.payload.message));
+    } else if (ev.kind === 'agent_message') {
+      closeToolGroup(context);
+      target.appendChild(bubble('assistant', ev.payload.message));
+    } else if (ev.kind === 'tool_call') {
+      const group = context.toolGroup || createToolGroup(target, context);
+      const card = toolCard(ev.payload);
+      group.add(card);
+      if (ev.payload.output) card.finish(ev.payload);
+      group.update();
+    } else if (ev.kind === 'tool_output') {
+      const card = context.toolMap.get(ev.payload.callId);
+      if (card) {
+        card.finish(ev.payload);
+        if (context.toolGroup) context.toolGroup.update();
       }
+    } else if (ev.kind === 'token_usage') {
+      context.pendingToken = ev.payload.info;
+    } else if (ev.kind === 'task_started') {
+      closeToolGroup(context);
+      target.appendChild(chip('开始处理', 'running'));
+    } else if (ev.kind === 'task_complete') {
+      closeToolGroup(context);
+      const parts = ['完成'];
+      if (ev.payload.durationMs != null) parts.push('用时 ' + Math.round(ev.payload.durationMs / 1000) + 's');
+      if (context.pendingToken && context.pendingToken.total_token_usage) {
+        const u = context.pendingToken.total_token_usage;
+        parts.push('输入 ' + u.input_tokens + ' · 输出 ' + u.output_tokens);
+      }
+      target.appendChild(chip(parts.join(' · '), ''));
+      context.pendingToken = null;
+    } else if (ev.kind === 'file_change') {
+      closeToolGroup(context);
+      const count = ev.payload.fileCount || 0;
+      target.appendChild(chip((ev.payload.success ? '已应用' : '应用失败') + (count ? ' · ' + count + ' 个文件' : ''), ev.payload.success ? '' : 'failed'));
     }
-    el.chat.appendChild(frag);
+  }
+
+  function renderChat(options) {
+    const opts = options || {};
+    const events = state.detail ? state.detail.events : [];
+    const oldPosition = opts.keepPosition == null ? el.chatScroll.scrollTop : opts.keepPosition;
+    const shouldFollow = opts.forceBottom || opts.shouldFollow || (!opts.preservePosition && state.followLatest);
+    el.chat.innerHTML = '';
+    state.eventKeys = new Set();
+    const context = { toolGroup: null, toolMap: new Map(), pendingToken: null, groupIndex: 0 };
+    state.renderContext = context;
+    if (!events.length) {
+      el.chat.appendChild(emptyState());
+    } else {
+      const frag = document.createDocumentFragment();
+      for (const ev of events) {
+        const key = eventKey(ev);
+        if (key) state.eventKeys.add(key);
+        appendTranscriptEvent(ev, frag, context);
+      }
+      el.chat.appendChild(frag);
+      closeToolGroup(context);
+    }
+    requestAnimationFrame(() => {
+      if (shouldFollow) el.chatScroll.scrollTop = el.chatScroll.scrollHeight;
+      else el.chatScroll.scrollTop = oldPosition;
+      updateLatestButton();
+    });
   }
 
   function bubble(role, text) {
     const div = document.createElement('div');
     div.className = 'msg ' + role;
-    div.textContent = text;
+    if (role === 'assistant') div.innerHTML = markdown(text);
+    else div.textContent = text;
     return div;
   }
 
@@ -337,43 +648,114 @@
   function toolCard(payload) {
     const el = document.createElement('div');
     el.className = 'tool';
-    const statusCls = payload.status === 'running' ? 'run' : 'ok';
-    const statusText = payload.status === 'running' ? '运行中' : '完成';
+    if (payload.callId) el.dataset.callId = payload.callId;
+    const statusCls = payload.status === 'running' ? 'run' : payload.status === 'failed' ? 'fail' : 'ok';
+    el.classList.add(statusCls);
+    const statusText = payload.status === 'running' ? '运行中' : payload.status === 'failed' ? '失败' : '完成';
+    const inputText = payload.input == null
+      ? ''
+      : typeof payload.input === 'string'
+        ? payload.input
+        : JSON.stringify(payload.input) || String(payload.input);
+    let rawCommand = inputText;
+    // Function-call events often persist arguments as JSON (for example
+    // {"cmd":"git status","workdir":"..."}); show the useful command
+    // in the collapsed row while keeping the complete payload in the body.
+    try {
+      const parsed = JSON.parse(rawCommand);
+      if (typeof parsed === 'string') rawCommand = parsed;
+      if (parsed && typeof parsed === 'object') {
+        const candidate = parsed.cmd || parsed.command || parsed.input || parsed.query;
+        if (typeof candidate === 'string') rawCommand = candidate;
+        else if (Array.isArray(candidate)) rawCommand = candidate.join(' ');
+      }
+    } catch {}
+    rawCommand = rawCommand.replace(/\s+/g, ' ').trim();
+    const commandLabel = truncate(rawCommand || String(payload.name || 'tool'), 220);
+    const commandPrefix = payload.status === 'running' ? 'Run' : 'Ran';
     el.innerHTML =
       '<div class="tool-head">' +
-      '<span class="tool-name">' + esc(payload.name) + '</span>' +
+      '<span class="tool-prefix">' + commandPrefix + '</span>' +
+      '<span class="tool-name">' + shellInline(commandLabel) + '</span>' +
       '<span class="tool-status ' + statusCls + '">' + statusText + '</span>' +
       '</div>' +
       '<div class="tool-body">' +
-      (payload.input ? '<div class="label">输入</div><pre></pre>' : '') +
+      (inputText ? '<div class="label">输入</div><pre></pre>' : '') +
       '<div class="label">输出</div><pre class="out"></pre>' +
       '</div>';
     const head = el.querySelector('.tool-head');
     const inputPre = el.querySelector('pre');
     const outPre = el.querySelector('pre.out');
-    if (inputPre) inputPre.textContent = truncate(payload.input, 4000);
-    outPre.textContent = '(等待输出…)';
-    head.addEventListener('click', () => el.classList.toggle('open'));
+    if (inputPre) inputPre.textContent = truncate(inputText, 4000);
+    outPre.textContent = payload.output || '(等待输出…)';
+    head.tabIndex = 0;
+    head.setAttribute('role', 'button');
+    head.setAttribute('aria-expanded', 'false');
+    const toggle = () => {
+      const open = !el.classList.contains('open');
+      el.classList.toggle('open', open);
+      head.setAttribute('aria-expanded', String(open));
+    };
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggle();
+      }
+    });
+    let handle;
     const finish = (outPayload) => {
-      const status = outPayload.exitCode === 0 ? 'ok' : outPayload.exitCode != null ? 'fail' : 'ok';
-      const text = outPayload.exitCode === 0 ? '成功' : outPayload.exitCode != null ? '失败 (exit ' + outPayload.exitCode + ')' : '完成';
+      const status = outPayload.exitCode != null
+        ? outPayload.exitCode === 0 ? 'ok' : 'fail'
+        : outPayload.status === 'failed' ? 'fail' : 'ok';
+      const text = status === 'fail'
+        ? outPayload.exitCode != null ? '失败 (exit ' + outPayload.exitCode + ')' : '失败'
+        : outPayload.exitCode === 0 ? '成功' : '完成';
       const st = el.querySelector('.tool-status');
       st.className = 'tool-status ' + status;
+      el.classList.remove('run', 'ok', 'fail');
+      el.classList.add(status);
       st.textContent = text;
       outPre.textContent = outPayload.output || '(无输出)';
+      if (handle && handle.group) handle.group.update();
     };
-    return { el, finish };
+    handle = { el, finish, callId: payload.callId, group: null };
+    return handle;
   }
 
   function appendEvent(ev) {
+    if (!state.detail) return;
     if (ev.seq != null && ev.seq <= state.lastSeq) return;
+    const key = eventKey(ev);
+    if (key && state.eventKeys.has(key)) return;
+    const shouldFollow = isNearLatest();
     if (ev.seq != null) state.lastSeq = ev.seq;
+    if (key) state.eventKeys.add(key);
     state.detail.events.push(ev);
-    renderChat();
-    el.chatScroll.scrollTop = el.chatScroll.scrollHeight;
+    if (!state.renderContext) {
+      renderChat({ forceBottom: shouldFollow });
+      return;
+    }
+    appendTranscriptEvent(ev, el.chat, state.renderContext);
+    if (shouldFollow) scrollLatest(true);
+    else updateLatestButton();
   }
 
   // ---------- new session ----------
+
+  function updateCreateButton() {
+    const hasProject = !!el.projectSelect.value;
+    const hasPrompt = !!el.newPrompt.value.trim();
+    el.createSession.disabled = !hasProject || !hasPrompt;
+  }
+
+  function openNewPanel() {
+    if (!state.projects.length) loadProjects();
+    el.newPanel.hidden = false;
+    el.newPrompt.value = '';
+    updateCreateButton();
+    el.newPrompt.focus();
+  }
 
   async function loadProjects() {
     try {
@@ -392,15 +774,21 @@
         opt.textContent = p;
         el.projectSelect.appendChild(opt);
       }
-    } catch {}
+      updateCreateButton();
+    } catch (e) {
+      el.projectSelect.innerHTML = '<option value="">项目列表加载失败</option>';
+      updateCreateButton();
+      if (!el.newPanel.hidden) toast('项目列表加载失败', true);
+    }
   }
 
-  el.newSessionBtn.addEventListener('click', () => {
-    if (!state.projects.length) loadProjects();
-    el.newPanel.hidden = false;
-    el.newPrompt.value = '';
-    el.newPrompt.focus();
+  el.newSessionBtn.addEventListener('click', openNewPanel);
+  el.sessionSearch.addEventListener('input', () => {
+    state.sessionFilter = el.sessionSearch.value;
+    renderSessionList();
   });
+  el.newPrompt.addEventListener('input', updateCreateButton);
+  el.projectSelect.addEventListener('change', updateCreateButton);
   el.cancelNew.addEventListener('click', () => {
     el.newPanel.hidden = true;
   });
@@ -408,10 +796,7 @@
   el.createSession.addEventListener('click', async () => {
     const cwd = el.projectSelect.value;
     const prompt = el.newPrompt.value.trim();
-    if (!cwd || !prompt) {
-      toast('请选择项目并输入指令', true);
-      return;
-    }
+    if (!cwd || !prompt) return;
     el.createSession.disabled = true;
     try {
       const data = await api('/api/sessions', { method: 'POST', body: { cwd, prompt } });
@@ -423,6 +808,7 @@
       toast('创建失败:' + e.message, true);
     } finally {
       el.createSession.disabled = false;
+      updateCreateButton();
     }
   });
 
@@ -446,21 +832,27 @@
   async function sendMessage() {
     const text = el.promptInput.value.trim();
     if (!text || state.running || !state.currentId) return;
+    const sessionId = state.currentId;
     el.promptInput.value = '';
     el.promptInput.style.height = 'auto';
     el.sendBtn.disabled = true;
     try {
-      await api('/api/sessions/' + state.currentId + '/messages', { method: 'POST', body: { prompt: text } });
+      await api('/api/sessions/' + sessionId + '/messages', { method: 'POST', body: { prompt: text } });
       setRunning(true);
       scheduleSessionRefresh();
     } catch (e) {
       toast('发送失败:' + e.message, true);
+      if (state.currentId === sessionId && !el.promptInput.value) {
+        el.promptInput.value = text;
+        el.promptInput.dispatchEvent(new Event('input'));
+      }
       el.sendBtn.disabled = false;
     }
   }
 
   el.stopBtn.addEventListener('click', async () => {
     if (!state.currentId) return;
+    if (!window.confirm('确定停止当前任务吗？未完成的中间结果可能丢失。')) return;
     try {
       await api('/api/sessions/' + state.currentId + '/stop', { method: 'POST', body: {} });
       toast('已发送停止请求');
@@ -469,12 +861,29 @@
     }
   });
 
+  el.chatScroll.addEventListener('scroll', updateLatestButton, { passive: true });
+  el.jumpLatest.addEventListener('click', () => scrollLatest(true));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !el.newPanel.hidden) {
+      el.newPanel.hidden = true;
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (window.matchMedia('(min-width: 900px)').matches) el.sessionSearch.focus();
+      else openSidebar(true);
+    }
+  });
+
   // ---------- init ----------
 
   (function init() {
+    setConnection('connecting');
+    renderChat();
     openEventStream();
     loadSessions();
     loadProjects();
+    updateLatestButton();
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {

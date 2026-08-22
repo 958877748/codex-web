@@ -9,6 +9,7 @@ const Runner = require('./lib/runner');
 
 const PORT = Number(process.env.PORT || 4000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const WEB_TOKEN = String(process.env.CODEX_WEB_TOKEN || '').trim();
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -27,9 +28,35 @@ function sendJson(res, code, obj) {
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
   });
   res.end(body);
+}
+
+function requestToken(req, url) {
+  const auth = String(req.headers.authorization || '');
+  if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
+  if (req.headers['x-codex-token']) return String(req.headers['x-codex-token']);
+  const cookie = String(req.headers.cookie || '').match(/(?:^|;\s*)codex_token=([^;]+)/);
+  if (cookie) {
+    try { return decodeURIComponent(cookie[1]); } catch { return ''; }
+  }
+  return url.searchParams.get('token') || '';
+}
+
+function authorized(req, url) {
+  return !WEB_TOKEN || requestToken(req, url) === WEB_TOKEN;
+}
+
+function trustedCwd(cwd) {
+  if (process.env.CODEX_ALLOW_UNTRUSTED_CWD === '1') return true;
+  const trusted = config.listProjects();
+  if (!trusted.length) return false;
+  const normalize = (value) => {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  const resolved = normalize(cwd);
+  return trusted.some((project) => normalize(project) === resolved);
 }
 
 function readBody(req) {
@@ -72,8 +99,9 @@ runner.onEvent = (ev, sessionId) => broadcast(sessionId, ev);
 runner.onState = (sessionId, state) => broadcast(sessionId, { seq: null, ts: new Date().toISOString(), kind: 'run_state', payload: { state } });
 
 function serveStatic(req, res, pathname) {
-  let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  let filePath = path.resolve(PUBLIC_DIR, pathname === '/' ? 'index.html' : '.' + pathname);
+  const relative = path.relative(PUBLIC_DIR, filePath);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
     res.writeHead(403);
     res.end();
     return;
@@ -92,10 +120,11 @@ function serveStatic(req, res, pathname) {
 function handleApi(req, res, url) {
   const { pathname } = url;
 
+  if (!authorized(req, url)) return sendJson(res, 401, { error: '需要访问令牌' });
+
   if (req.method === 'GET' && pathname === '/api/status') {
     return sendJson(res, 200, {
       ok: true,
-      codexBin: runner.bin,
       running: runner.runningList(),
       sessionsCount: sessions.listSessions().length,
     });
@@ -117,7 +146,8 @@ function handleApi(req, res, url) {
   if (req.method === 'GET' && detailMatch) {
     const detail = sessions.sessionDetail(detailMatch[1]);
     if (!detail) return sendJson(res, 404, { error: 'session not found' });
-    return sendJson(res, 200, { ...detail, status: runner.isRunning(detail.id) ? 'running' : 'idle' });
+    const { file, ...publicDetail } = detail;
+    return sendJson(res, 200, { ...publicDetail, status: runner.isRunning(detail.id) ? 'running' : 'idle' });
   }
 
   if (req.method === 'POST' && pathname === '/api/sessions') {
@@ -125,7 +155,10 @@ function handleApi(req, res, url) {
       .then(async (body) => {
         const cwd = String(body.cwd || '').trim();
         const prompt = String(body.prompt || '').trim();
-        if (!cwd || !fs.existsSync(cwd)) return sendJson(res, 400, { error: 'cwd 不存在' });
+        let cwdIsDirectory = false;
+        try { cwdIsDirectory = !!cwd && fs.statSync(cwd).isDirectory(); } catch {}
+        if (!cwdIsDirectory) return sendJson(res, 400, { error: 'cwd 不存在' });
+        if (!trustedCwd(cwd)) return sendJson(res, 403, { error: 'cwd 不在已信任项目列表中' });
         if (!prompt) return sendJson(res, 400, { error: 'prompt 不能为空' });
         try {
           const id = await runner.start({ cwd, prompt });
@@ -171,6 +204,9 @@ const server = http.createServer((req, res) => {
   const pathname = url.pathname;
 
   if (pathname === '/api/events') {
+    if (!authorized(req, url)) {
+      return sendJson(res, 401, { error: '需要访问令牌' });
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache',

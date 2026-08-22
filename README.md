@@ -36,12 +36,16 @@ http://192.168.1.3:4000/
 | `PORT` | 监听端口 | `4000` |
 | `CODEX_BIN` | Codex 可执行文件路径 | 自动在 npm 全局目录中查找 |
 | `CODEX_HOME` | Codex 配置/会话目录 | `~/.codex` |
+| `CODEX_WEB_TOKEN` | 可选的局域网访问令牌 | 不启用 |
+| `CODEX_ALLOW_UNTRUSTED_CWD` | 允许 API 使用未列入 trusted 的目录 | `0` |
 
 项目目录下拉框来自 `~/.codex/config.toml` 中 `trust_level = "trusted"` 的项目。
 
+如果设置了 `CODEX_WEB_TOKEN`，首次访问时使用 `http://<电脑IP>:4000/?token=<令牌>`，页面会自动保存令牌并清理地址栏中的参数。
+
 ## 安全注意
 
-按你的要求,本面板不做登录鉴权。它等于把电脑上的 Codex 能力开放给局域网:任何能访问到 `http://<电脑IP>:4000/` 的人,都可以直接让你的电脑执行命令(本机 config 是 `approval_policy = "never"` + `danger-full-access`)。请只在可信的 Wi-Fi 下使用。
+默认仍保持免登录，方便在可信局域网中使用；但它等于把电脑上的 Codex 能力开放给局域网，任何能访问到地址的人都可以让你的电脑执行命令(本机 config 是 `approval_policy = "never"` + `danger-full-access`)。如果网络不完全可信，请设置 `CODEX_WEB_TOKEN` 启用令牌保护，并只在必要时开放 Windows 防火墙端口。
 
 首次使用如手机连不上,请在 Windows 防火墙中放行 Node.js 的入站连接(私有网络),或在管理员 PowerShell 中执行:
 
@@ -65,6 +69,8 @@ codex exec --json / codex exec resume
 ```
 
 后端每次"新建会话/发消息"都会拉起一个 `codex exec` 或 `codex exec resume` 进程,解析 stdout 拿到会话 ID,同时增量读取会话 JSONL 文件,把归一化后的事件通过 SSE 推给前端。历史会话直接解析 `~/.codex/sessions`,不需要额外数据库。
+
+任务结束后,后端会自动执行 `codex migrate-rollouts --apply --thread <id>`,将网页创建的会话同步到新版 Codex CLI 使用的分页会话索引,因此它们也会出现在 CLI 的会话列表中。
 
 ## 已知限制
 

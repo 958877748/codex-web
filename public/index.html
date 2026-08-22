@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0f1216">
+  <meta name="theme-color" content="#0a0a0a">
   <title>Codex 远程</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -13,25 +13,32 @@
     <aside id="sidebar">
       <div class="sidebar-head">
         <span class="brand">Codex 远程</span>
-        <button id="closeSidebar" class="icon-btn" title="关闭">×</button>
+        <button id="closeSidebar" class="icon-btn" title="关闭会话列表" aria-label="关闭会话列表">×</button>
       </div>
-      <button id="newSessionBtn" class="new-btn">+ 新会话</button>
+      <button id="newSessionBtn" class="new-btn" type="button">+ 新会话</button>
+      <div class="sidebar-tools">
+        <label class="sr-only" for="sessionSearch">搜索会话</label>
+        <input id="sessionSearch" type="search" autocomplete="off" placeholder="搜索会话或项目…">
+        <span id="sessionCount" class="session-count"></span>
+      </div>
       <ul id="sessionList"></ul>
     </aside>
 
     <main>
       <header>
-        <button id="menuBtn" class="icon-btn" title="会话列表">☰</button>
+        <button id="menuBtn" class="icon-btn" type="button" title="打开会话列表" aria-label="打开会话列表">☰</button>
         <div class="title-wrap">
           <div id="chatTitle">选择或新建一个会话</div>
           <div id="chatSub"></div>
         </div>
+        <div id="connectionPill" class="connection-pill connecting" role="status" aria-live="polite">连接中</div>
         <div id="statusPill" class="pill idle">空闲</div>
-        <button id="stopBtn" class="danger-btn" hidden>停止</button>
+        <button id="stopBtn" class="danger-btn" type="button" hidden>停止</button>
       </header>
 
-      <section id="chatScroll">
-        <div id="chat"></div>
+      <section id="chatScroll" aria-label="会话记录">
+        <div id="chat" role="log" aria-live="polite" aria-relevant="additions text"></div>
+        <button id="jumpLatest" class="jump-latest" type="button" hidden>↓ 最新</button>
       </section>
 
       <section id="newPanel" hidden>
@@ -42,15 +49,15 @@
           <label>初始指令</label>
           <textarea id="newPrompt" rows="4" placeholder="告诉 Codex 要做什么…"></textarea>
           <div class="panel-actions">
-            <button id="cancelNew" class="ghost-btn">取消</button>
-            <button id="createSession" class="primary-btn">开始</button>
+            <button id="cancelNew" class="ghost-btn" type="button">取消</button>
+            <button id="createSession" class="primary-btn" type="button" disabled>开始</button>
           </div>
         </div>
       </section>
 
       <footer id="composer">
-        <textarea id="promptInput" rows="1" placeholder="输入消息,Enter 发送" disabled></textarea>
-        <button id="sendBtn" class="primary-btn" disabled>发送</button>
+        <textarea id="promptInput" rows="1" placeholder="输入消息，Enter 发送 · Shift+Enter 换行" aria-label="输入消息" disabled></textarea>
+        <button id="sendBtn" class="primary-btn" type="button" disabled>发送</button>
       </footer>
     </main>
   </div>
