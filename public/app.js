@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
@@ -272,6 +272,12 @@
     if (ev.kind === 'hello') {
       loadSessions();
       return;
+    }
+    if (ev.kind === 'turn_context') {
+      if (msg.sessionId === state.currentId && state.detail && ev.payload.model) {
+        state.detail.model = ev.payload.model;
+        el.chatSub.textContent = [state.detail.cwd, state.detail.model].filter(Boolean).join(' · ');
+      }
     }
     if (ev.kind === 'run_state') {
       const running = ev.payload.state === 'running';
