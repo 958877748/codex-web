@@ -110,9 +110,10 @@ function serveStatic(req, res, pathname) {
     filePath = path.join(PUBLIC_DIR, 'index.html');
   }
   const ext = path.extname(filePath).toLowerCase();
+  const cacheControl = ['.html', '.js', '.css'].includes(ext) ? 'no-store' : 'no-cache';
   res.writeHead(200, {
     'Content-Type': MIME[ext] || 'application/octet-stream',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': cacheControl,
   });
   fs.createReadStream(filePath).pipe(res);
 }
