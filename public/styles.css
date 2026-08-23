@@ -177,6 +177,8 @@ header::before { width: 7px; height: 7px; flex: none; border-radius: 50%; backgr
 .ghost-btn, .primary-btn { min-height: 32px; padding: 6px 12px; border-radius: 2px; font-size: .78rem; }
 .ghost-btn { border-color: #383838; color: var(--text-soft); }
 .ghost-btn:hover { background: var(--bg-hover); border-color: #555; }
+.copy-session-btn { flex: none; min-height: 30px; padding-inline: 8px; color: var(--muted); border-color: #383838; font-size: .7rem; white-space: nowrap; }
+.copy-session-btn:hover { color: var(--text-soft); background: var(--bg-hover); border-color: #555; }
 .primary-btn { background: rgba(31, 190, 58, .1); border-color: #2f7d3c; color: var(--green-bright); font-weight: 600; }
 .primary-btn:hover { background: var(--green); border-color: var(--green); color: #071006; }
 

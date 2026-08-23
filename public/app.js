@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
@@ -45,6 +45,7 @@
     createSession: $('createSession'),
     promptInput: $('promptInput'),
     sendBtn: $('sendBtn'),
+    copySessionIdBtn: $('copySessionIdBtn'),
     toast: $('toast'),
   };
 
@@ -424,6 +425,7 @@
     state.renderContext = null;
     el.promptInput.disabled = true;
     el.sendBtn.disabled = true;
+    el.copySessionIdBtn.hidden = !id;
     openSidebar(false);
     el.newPanel.hidden = true;
     el.chat.innerHTML = '<div class="empty-state"><h2>加载中…</h2></div>';
@@ -445,6 +447,7 @@
       state.currentId = null;
       try { localStorage.removeItem('codex-current-session'); } catch {}
       renderChat();
+      el.copySessionIdBtn.hidden = true;
     }
   }
 
@@ -593,13 +596,29 @@
       target.appendChild(chip('开始处理', 'running'));
     } else if (ev.kind === 'task_complete') {
       closeToolGroup(context);
-      const parts = ['完成'];
-      if (ev.payload.durationMs != null) parts.push('用时 ' + Math.round(ev.payload.durationMs / 1000) + 's');
-      if (context.pendingToken && context.pendingToken.total_token_usage) {
-        const u = context.pendingToken.total_token_usage;
-        parts.push('输入 ' + u.input_tokens + ' · 输出 ' + u.output_tokens);
+      if (ev.payload.error && ev.payload.error.message) {
+        let message = '';
+        const rawError = String(ev.payload.error.message);
+        try {
+          const parsed = JSON.parse(rawError);
+          message = parsed?.error?.message || parsed?.message || rawError;
+        } catch {
+          message = rawError;
+        }
+        target.appendChild(bubble('assistant', '**⚠️ 任务异常结束**\n\n```text\n' + message + '\n```'));
+      } else if (!ev.payload.lastAgentMessage) {
+        const parts = ['完成（无最终回复）'];
+        if (ev.payload.durationMs != null) parts.push('用时 ' + Math.round(ev.payload.durationMs / 1000) + 's');
+        target.appendChild(chip(parts.join(' · '), 'failed'));
+      } else {
+        const parts = ['完成'];
+        if (ev.payload.durationMs != null) parts.push('用时 ' + Math.round(ev.payload.durationMs / 1000) + 's');
+        if (context.pendingToken && context.pendingToken.total_token_usage) {
+          const u = context.pendingToken.total_token_usage;
+          parts.push('输入 ' + u.input_tokens + ' · 输出 ' + u.output_tokens);
+        }
+        target.appendChild(chip(parts.join(' · '), ''));
       }
-      target.appendChild(chip(parts.join(' · '), ''));
       context.pendingToken = null;
     } else if (ev.kind === 'file_change') {
       closeToolGroup(context);
@@ -734,6 +753,24 @@
     if (ev.seq != null && ev.seq <= state.lastSeq) return;
     const key = eventKey(ev);
     if (key && state.eventKeys.has(key)) return;
+
+    // Rollouts often persist the same user/agent message as both a response
+    // item and an item_completed event. Match the adjacent dedupe behavior
+    // used by sessionDetail so live updates do not briefly show duplicates.
+    const events = state.detail.events;
+    const previousMessage = events.length ? events[events.length - 1] : null;
+    if (
+      (ev.kind === 'user_message' || ev.kind === 'agent_message') &&
+      previousMessage &&
+      previousMessage.kind === ev.kind &&
+      previousMessage.payload &&
+      previousMessage.payload.message === ev.payload.message
+    ) {
+      if (ev.seq != null) state.lastSeq = ev.seq;
+      if (key) state.eventKeys.add(key);
+      return;
+    }
+
     const shouldFollow = isNearLatest();
     if (ev.seq != null) state.lastSeq = ev.seq;
     if (key) state.eventKeys.add(key);
@@ -856,6 +893,30 @@
     }
   }
 
+  async function copySessionId() {
+    const id = state.currentId;
+    if (!id) return;
+    try {
+      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(id);
+      else {
+        const area = document.createElement('textarea');
+        area.value = id;
+        area.setAttribute('readonly', '');
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        if (!ok) throw new Error('copy failed');
+      }
+      toast('会话 ID 已复制');
+    } catch (e) {
+      toast('复制失败:' + e.message, true);
+    }
+  }
+
+  el.copySessionIdBtn.addEventListener('click', copySessionId);
   el.stopBtn.addEventListener('click', async () => {
     if (!state.currentId) return;
     if (!window.confirm('确定停止当前任务吗？未完成的中间结果可能丢失。')) return;
