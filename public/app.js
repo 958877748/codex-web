@@ -17,6 +17,7 @@
     connection: 'connecting',
     eventKeys: new Set(),
     renderContext: null,
+    backgroundTerminals: [],
   };
 
   const el = {
@@ -34,6 +35,11 @@
     chatSub: $('chatSub'),
     connectionPill: $('connectionPill'),
     statusPill: $('statusPill'),
+    backgroundBtn: $('backgroundBtn'),
+    backgroundPanel: $('backgroundPanel'),
+    backgroundCount: $('backgroundCount'),
+    backgroundList: $('backgroundList'),
+    cleanBackgroundBtn: $('cleanBackgroundBtn'),
     stopBtn: $('stopBtn'),
     chatScroll: $('chatScroll'),
     chat: $('chat'),
@@ -286,6 +292,7 @@
       scheduleSessionRefresh();
       return;
     }
+    if (msg.sessionId === state.currentId) scheduleBackgroundRefresh();
     if (msg.sessionId === state.currentId && state.detail) {
       appendEvent(ev);
     } else {
@@ -302,6 +309,45 @@
       refreshTimer = null;
       loadSessions();
     }, 800);
+  }
+
+  let backgroundRefreshTimer = null;
+  function scheduleBackgroundRefresh() {
+    if (backgroundRefreshTimer || !state.currentId) return;
+    backgroundRefreshTimer = setTimeout(() => { backgroundRefreshTimer = null; loadBackgroundTerminals(); }, 500);
+  }
+
+  async function loadBackgroundTerminals() {
+    if (!state.currentId) return;
+    try {
+      const data = await api('/api/sessions/' + state.currentId + '/background-terminals');
+      state.backgroundTerminals = data.terminals || [];
+    } catch { state.backgroundTerminals = []; }
+    renderBackgroundTerminals();
+  }
+
+  function renderBackgroundTerminals() {
+    const list = state.backgroundTerminals;
+    el.backgroundCount.textContent = String(list.length);
+    el.backgroundBtn.hidden = !state.currentId || !list.length;
+    if (!list.length) el.backgroundPanel.hidden = true;
+    el.backgroundList.innerHTML = '';
+    if (!list.length) return;
+    for (const terminal of list) {
+      const row = document.createElement('div'); row.className = 'background-item';
+      const info = document.createElement('div'); info.className = 'background-info';
+      info.innerHTML = '<div class="background-command">' + esc(terminal.command || 'background process') + '</div>' +
+        '<div class="background-meta">' + esc(terminal.cwd || '') + (terminal.osPid ? ' · PID ' + esc(terminal.osPid) : '') + '</div>';
+      const stop = document.createElement('button'); stop.className = 'danger-btn'; stop.type = 'button'; stop.textContent = '停止';
+      stop.addEventListener('click', async () => {
+        stop.disabled = true;
+        try {
+          await api('/api/sessions/' + state.currentId + '/background-terminals/' + encodeURIComponent(terminal.processId) + '/terminate', { method: 'POST', body: {} });
+          toast('后台终端已停止'); loadBackgroundTerminals();
+        } catch (e) { toast('停止后台终端失败: ' + e.message, true); stop.disabled = false; }
+      });
+      row.appendChild(info); row.appendChild(stop); el.backgroundList.appendChild(row);
+    }
   }
 
   async function loadSessions() {
@@ -423,9 +469,12 @@
     state.lastSeq = -1;
     state.eventKeys = new Set();
     state.renderContext = null;
+    state.backgroundTerminals = [];
     el.promptInput.disabled = true;
     el.sendBtn.disabled = true;
     el.copySessionIdBtn.hidden = !id;
+    el.backgroundPanel.hidden = true;
+    el.backgroundBtn.hidden = true;
     openSidebar(false);
     el.newPanel.hidden = true;
     el.chat.innerHTML = '<div class="empty-state"><h2>加载中…</h2></div>';
@@ -441,6 +490,7 @@
       el.chatTitle.textContent = titleFromDetail(detail);
       el.chatSub.textContent = [detail.cwd, detail.model].filter(Boolean).join(' · ');
       renderChat({ forceBottom: true });
+      loadBackgroundTerminals();
       scheduleSessionRefresh();
     } catch (e) {
       toast('加载会话失败:' + e.message, true);
@@ -448,6 +498,9 @@
       try { localStorage.removeItem('codex-current-session'); } catch {}
       renderChat();
       el.copySessionIdBtn.hidden = true;
+      el.backgroundBtn.hidden = true;
+      el.backgroundPanel.hidden = true;
+      renderSessionList();
     }
   }
 
@@ -889,6 +942,13 @@
         el.promptInput.value = text;
         el.promptInput.dispatchEvent(new Event('input'));
       }
+      if (/session (?:no longer )?available|thread not found/i.test(e.message)) {
+        state.currentId = null;
+        state.detail = null;
+        try { localStorage.removeItem('codex-current-session'); } catch {}
+        renderChat();
+        renderSessionList();
+      }
       el.sendBtn.disabled = false;
     }
   }
@@ -917,6 +977,19 @@
   }
 
   el.copySessionIdBtn.addEventListener('click', copySessionId);
+  el.backgroundBtn.addEventListener('click', () => {
+    el.backgroundPanel.hidden = !el.backgroundPanel.hidden;
+    if (!el.backgroundPanel.hidden) loadBackgroundTerminals();
+  });
+  el.cleanBackgroundBtn.addEventListener('click', async () => {
+    if (!state.currentId) return;
+    el.cleanBackgroundBtn.disabled = true;
+    try {
+      await api('/api/sessions/' + state.currentId + '/background-terminals/clean', { method: 'POST', body: {} });
+      toast('后台终端已清理'); el.backgroundPanel.hidden = true; loadBackgroundTerminals();
+    } catch (e) { toast('清理后台终端失败: ' + e.message, true); }
+    finally { el.cleanBackgroundBtn.disabled = false; }
+  });
   el.stopBtn.addEventListener('click', async () => {
     if (!state.currentId) return;
     if (!window.confirm('确定停止当前任务吗？未完成的中间结果可能丢失。')) return;

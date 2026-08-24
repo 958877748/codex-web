@@ -4,7 +4,6 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const config = require('./lib/config');
-const sessions = require('./lib/sessions');
 const Runner = require('./lib/runner');
 
 const PORT = Number(process.env.PORT || 4000);
@@ -118,7 +117,7 @@ function serveStatic(req, res, pathname) {
   fs.createReadStream(filePath).pipe(res);
 }
 
-function handleApi(req, res, url) {
+async function handleApi(req, res, url) {
   const { pathname } = url;
 
   if (!authorized(req, url)) return sendJson(res, 401, { error: '需要访问令牌' });
@@ -127,7 +126,7 @@ function handleApi(req, res, url) {
     return sendJson(res, 200, {
       ok: true,
       running: runner.runningList(),
-      sessionsCount: sessions.listSessions().length,
+      sessionsCount: (await runner.listSessions()).length,
     });
   }
 
@@ -136,7 +135,7 @@ function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && pathname === '/api/sessions') {
-    const list = sessions.listSessions().map((s) => ({
+    const list = (await runner.listSessions()).map((s) => ({
       ...s,
       status: runner.isRunning(s.id) ? 'running' : 'idle',
     }));
@@ -145,10 +144,34 @@ function handleApi(req, res, url) {
 
   const detailMatch = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)$/);
   if (req.method === 'GET' && detailMatch) {
-    const detail = sessions.sessionDetail(detailMatch[1]);
+    let detail;
+    try { detail = await runner.sessionDetail(detailMatch[1]); }
+    catch (e) {
+      if (/thread not found/i.test(e.message)) return sendJson(res, 404, { error: 'session no longer available' });
+      return sendJson(res, 502, { error: e.message });
+    }
     if (!detail) return sendJson(res, 404, { error: 'session not found' });
-    const { file, ...publicDetail } = detail;
-    return sendJson(res, 200, { ...publicDetail, status: runner.isRunning(detail.id) ? 'running' : 'idle' });
+    return sendJson(res, 200, { ...detail, status: runner.isRunning(detail.id) ? 'running' : 'idle' });
+  }
+
+  const backgroundMatch = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)\/background-terminals$/);
+  if (req.method === 'GET' && backgroundMatch) {
+    try { return sendJson(res, 200, { terminals: await runner.backgroundTerminals(backgroundMatch[1]) }); }
+    catch (e) { return sendJson(res, 502, { error: e.message }); }
+  }
+
+  const backgroundTerminateMatch = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)\/background-terminals\/([^/]+)\/terminate$/);
+  if (req.method === 'POST' && backgroundTerminateMatch) {
+    try {
+      const processId = decodeURIComponent(backgroundTerminateMatch[2]);
+      return sendJson(res, 200, await runner.terminateBackgroundTerminal(backgroundTerminateMatch[1], processId));
+    } catch (e) { return sendJson(res, 502, { error: e.message }); }
+  }
+
+  const backgroundCleanMatch = pathname.match(/^\/api\/sessions\/([0-9a-f-]+)\/background-terminals\/clean$/);
+  if (req.method === 'POST' && backgroundCleanMatch) {
+    try { await runner.cleanBackgroundTerminals(backgroundCleanMatch[1]); return sendJson(res, 200, { ok: true }); }
+    catch (e) { return sendJson(res, 502, { error: e.message }); }
   }
 
   if (req.method === 'POST' && pathname === '/api/sessions') {
@@ -180,7 +203,12 @@ function handleApi(req, res, url) {
       .then(async (body) => {
         const prompt = String(body.prompt || '').trim();
         if (!prompt) return sendJson(res, 400, { error: 'prompt 不能为空' });
-        if (!sessions.findSessionFile(id)) return sendJson(res, 404, { error: 'session not found' });
+        try {
+          if (!await runner.hasSession(id)) return sendJson(res, 404, { error: 'session not found' });
+        } catch (e) {
+          if (/thread not found/i.test(e.message)) return sendJson(res, 404, { error: 'session no longer available' });
+          throw e;
+        }
         try {
           await runner.send(id, prompt);
           return sendJson(res, 200, { ok: true });

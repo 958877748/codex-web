@@ -33,9 +33,18 @@
         </div>
         <div id="connectionPill" class="connection-pill connecting" role="status" aria-live="polite">连接中</div>
         <div id="statusPill" class="pill idle">空闲</div>
+        <button id="backgroundBtn" class="ghost-btn background-btn" type="button" hidden>后台服务</button>
         <button id="copySessionIdBtn" class="ghost-btn copy-session-btn" type="button" title="复制会话 ID" aria-label="复制会话 ID" hidden>复制ID</button>
         <button id="stopBtn" class="danger-btn" type="button" hidden>停止</button>
       </header>
+
+      <section id="backgroundPanel" class="background-panel" hidden>
+        <div class="background-head">
+          <div><span class="background-title">后台终端</span><span id="backgroundCount" class="background-count">0</span></div>
+          <button id="cleanBackgroundBtn" class="ghost-btn" type="button">清理已结束</button>
+        </div>
+        <div id="backgroundList" class="background-list"></div>
+      </section>
 
       <section id="chatScroll" aria-label="会话记录">
         <div id="chat" role="log" aria-live="polite" aria-relevant="additions text"></div>
