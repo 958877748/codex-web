@@ -49,10 +49,10 @@ codex app-server --listen stdio://
 npm start
 ```
 
-如果项目仓库已公开,也可以从 Git 仓库通过 npx 启动(将地址替换为实际仓库):
+发布到 npm 后,可以直接通过 npx 启动:
 
 ```bash
-npx --yes github:OWNER/REPOSITORY
+npx --yes codex-web-panel
 ```
 
 该命令会执行 `codex-web` CLI 入口。首次使用仍需在服务器上准备 Node.js、Codex CLI、`CODEX_HOME` 和访问令牌;生产环境建议使用下面的 systemd 服务。

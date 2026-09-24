@@ -1,12 +1,20 @@
 {
   "name": "codex-web-panel",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "Mobile web panel for controlling Codex CLI on the local machine",
   "main": "server.js",
   "bin": {
     "codex-web": "bin/codex-web.js"
   },
+  "files": [
+    "bin",
+    "lib",
+    "public",
+    "server.js",
+    "README.md",
+    "deploy"
+  ],
   "scripts": {
     "start": "node server.js"
   },
