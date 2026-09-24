@@ -4,6 +4,9 @@
   "private": true,
   "description": "Mobile web panel for controlling Codex CLI on the local machine",
   "main": "server.js",
+  "bin": {
+    "codex-web": "bin/codex-web.js"
+  },
   "scripts": {
     "start": "node server.js"
   },
