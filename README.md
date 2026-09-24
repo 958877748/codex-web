@@ -29,6 +29,95 @@ http://192.168.1.3:4000/
 
 手机连同一个 Wi-Fi,用浏览器打开这个地址即可,不需要登录。
 
+## Ubuntu + Cloudflare Tunnel 部署
+
+项目可以直接运行在 Ubuntu 服务器上,并通过 Cloudflare Tunnel 对外提供 HTTPS 访问。Tunnel 只连接本机的 `127.0.0.1:4000`,不需要开放公网端口。
+
+### 1. 准备运行目录和 Codex
+
+安装 Node.js 18 或更高版本,并确认 Codex CLI 可用:
+
+```bash
+node --version
+codex --version
+codex app-server --listen stdio://
+```
+
+项目没有第三方 Node.js 依赖,可以直接用 npm 启动:
+
+```bash
+npm start
+```
+
+生产环境使用下面提供的 systemd 服务即可达到同样效果,并支持异常自动重启。
+
+把项目放到 `/opt/codex-web`,并确保运行服务的用户(下面示例为 `ubuntu`)可以读取 Codex 配置和认证信息:
+
+```bash
+sudo mkdir -p /opt/codex-web /etc/codex-web
+sudo chown -R ubuntu:ubuntu /opt/codex-web
+```
+
+复制 `deploy/codex-web.env.example` 到 `/etc/codex-web/codex-web.env`,修改 `CODEX_HOME`、`CODEX_BIN` 和随机的 `CODEX_WEB_TOKEN`。配置文件权限应限制为服务用户:
+
+```bash
+sudo chown ubuntu:ubuntu /etc/codex-web/codex-web.env
+sudo chmod 600 /etc/codex-web/codex-web.env
+```
+
+项目目录必须在 `$CODEX_HOME/config.toml` 中标记为 `trusted` 或 `always`,例如:
+
+```toml
+[projects."/home/ubuntu/my-project"]
+trust_level = "trusted"
+```
+
+### 2. 创建 Cloudflare Tunnel
+
+安装 `cloudflared` 后登录并创建 Tunnel:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create codex-web
+cloudflared tunnel route dns codex-web codex.example.com
+```
+
+复制 `deploy/cloudflared/config.yml.example` 到 `/home/ubuntu/.cloudflared/config.yml`,将域名和 `<TUNNEL-ID>` 替换为实际值。确保 Tunnel 凭据只能被 `ubuntu` 读取:
+
+```bash
+chown -R ubuntu:ubuntu /home/ubuntu/.cloudflared
+chmod 700 /home/ubuntu/.cloudflared
+chmod 600 /home/ubuntu/.cloudflared/*.json
+```
+
+### 3. 使用 systemd 常驻运行
+
+复制两个服务文件:
+
+```bash
+sudo cp deploy/systemd/codex-web.service /etc/systemd/system/
+sudo cp deploy/systemd/cloudflared-codex-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now codex-web.service
+sudo systemctl enable --now cloudflared-codex-web.service
+```
+
+检查状态和日志:
+
+```bash
+systemctl status codex-web cloudflared-codex-web
+journalctl -u codex-web -f
+journalctl -u cloudflared-codex-web -f
+```
+
+访问 `https://codex.example.com/?token=你的令牌`。页面会保存令牌并清理地址栏中的参数。建议同时使用 Cloudflare Access 限制允许访问的账号,并保留 `CODEX_WEB_TOKEN`。
+
+Cloudflare Tunnel 使用出站连接,因此不需要对公网开放 4000 端口。若启用了 UFW,可以保持该端口只对本机可用:
+
+```bash
+sudo ufw deny 4000/tcp
+```
+
 ## 配置
 
 | 环境变量 | 作用 | 默认值 |
@@ -77,4 +166,4 @@ codex exec --json / codex exec resume
 - 实时推送只针对本服务启动的会话;Codex Desktop / IDE 里已经开着的会话在面板里只能看到历史记录
 - 同一个会话同时只允许一个任务在跑,运行中不能发新消息
 - "停止"在 Windows 上通过 `taskkill /T /F` 强杀进程树,未保存的中间状态可能丢失
-- 没有鉴权,局域网内任何设备都可以控制(按你的要求移除)
+- 默认不启用鉴权;如果网络不完全可信,请设置 `CODEX_WEB_TOKEN`,并配合 Cloudflare Access 使用

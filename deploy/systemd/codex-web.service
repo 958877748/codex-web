@@ -1,0 +1,18 @@
+[Unit]
+Description=Codex Web Panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/codex-web
+EnvironmentFile=/etc/codex-web/codex-web.env
+ExecStart=/usr/bin/node /opt/codex-web/server.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

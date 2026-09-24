@@ -1,0 +1,8 @@
+# Copy to /home/ubuntu/.cloudflared/config.yml and replace the placeholders.
+tunnel: codex-web
+credentials-file: /home/ubuntu/.cloudflared/<TUNNEL-ID>.json
+
+ingress:
+  - hostname: codex.example.com
+    service: http://127.0.0.1:4000
+  - service: http_status:404

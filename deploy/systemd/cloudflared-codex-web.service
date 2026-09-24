@@ -1,0 +1,15 @@
+[Unit]
+Description=Cloudflare Tunnel for Codex Web Panel
+After=network-online.target codex-web.service
+Wants=network-online.target codex-web.service
+
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/usr/bin/cloudflared --config /home/ubuntu/.cloudflared/config.yml tunnel run codex-web
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
