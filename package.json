@@ -1,5 +1,5 @@
 {
-  "name": "codex-web-panel",
+  "name": "codex-web",
   "version": "0.1.0",
   "private": false,
   "description": "Mobile web panel for controlling Codex CLI on the local machine",

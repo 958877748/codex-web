@@ -52,7 +52,7 @@ npm start
 发布到 npm 后,可以直接通过 npx 启动:
 
 ```bash
-npx --yes codex-web-panel
+npx --yes codex-web
 ```
 
 该命令会执行 `codex-web` CLI 入口。首次使用仍需在服务器上准备 Node.js、Codex CLI、`CODEX_HOME` 和访问令牌;生产环境建议使用下面的 systemd 服务。
